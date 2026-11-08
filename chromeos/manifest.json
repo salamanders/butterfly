@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "A Kaleidoscope of Butterflies (ChromeOS Screensaver)",
+  "version": "1.0.0",
+  "description": "60 FPS WebGL2 3D butterfly kaleidoscope screensaver for ChromeOS with museum specimens, structural iridescence, and biomechanical flight.",
+  "permissions": [
+    "idle",
+    "power",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Butterfly Kaleidoscope Screensaver",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon_16.png",
+      "48": "icons/icon_48.png",
+      "128": "icons/icon_128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon_16.png",
+    "48": "icons/icon_48.png",
+    "128": "icons/icon_128.png"
+  }
+}

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Butterfly Kaleidoscope Settings</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      width: 280px;
+      background: #0b0c10;
+      color: #f0f4f8;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #1f2430;
+    }
+    .header img {
+      width: 32px;
+      height: 32px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffb347;
+    }
+    .header p {
+      margin: 2px 0 0;
+      font-size: 11px;
+      color: #8b95a5;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    label {
+      color: #d0d7e2;
+      font-weight: 500;
+    }
+    select, input[type="range"] {
+      background: #161922;
+      color: #f0f4f8;
+      border: 1px solid #2b3245;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #ff9f1c;
+      cursor: pointer;
+    }
+    .slider-wrap {
+      margin-bottom: 14px;
+    }
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+    }
+    .badge {
+      color: #5bc0be;
+      font-weight: 600;
+    }
+    input[type="range"] {
+      width: 100%;
+      padding: 0;
+      accent-color: #5bc0be;
+      cursor: pointer;
+    }
+    button {
+      width: 100%;
+      padding: 10px 12px;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #ff9f1c 0%, #ff5e62 100%);
+      color: #090a0f;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      transition: transform 0.1s ease, filter 0.15s ease;
+    }
+    button:hover {
+      filter: brightness(1.08);
+    }
+    button:active {
+      transform: scale(0.98);
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #7b8494;
+      text-align: center;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="icons/icon_48.png" alt="Butterfly icon">
+    <div>
+      <h1>Kaleidoscope of Butterflies</h1>
+      <p>ChromeOS 3D WebGL2 Screensaver</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <label for="enabledToggle">Auto-launch when idle</label>
+    <input type="checkbox" id="enabledToggle" checked>
+  </div>
+
+  <div class="row">
+    <label for="idleSelect">Idle timeout</label>
+    <select id="idleSelect">
+      <option value="15">15 seconds (Test)</option>
+      <option value="60">1 minute</option>
+      <option value="120" selected>2 minutes</option>
+      <option value="300">5 minutes</option>
+      <option value="600">10 minutes</option>
+      <option value="900">15 minutes</option>
+    </select>
+  </div>
+
+  <div class="slider-wrap">
+    <div class="slider-header">
+      <label for="countRange">Butterfly count</label>
+      <span class="badge" id="countLabel">75</span>
+    </div>
+    <input type="range" id="countRange" min="20" max="200" step="5" value="75">
+  </div>
+
+  <button id="launchBtn" type="button">Launch Screensaver Now</button>
+  <div class="hint">Move the mouse/trackpad or press any key to dismiss the screensaver.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
