@@ -1,0 +1,28 @@
+We ship two libraries:
+
+1. libapriltag.so
+   This is the main library that provides the main apriltag functionality. It
+   exports ONLY apriltag_* and tag* symbols. Normal applications should use
+   this library only
+
+2. libapriltag-utils.so
+   This library provides auxiliary functionality used primarily by the apriltag
+   examples. It provides apriltag-specific functions for reading/writing images,
+   processing commandline options and such. This library exports more symbols,
+   many with very generic names. Most people won't need this library
+
+The newer tag families (tagCircle49h12, tagStandard52h13, tagCustom48h12,
+tagStandard41h12) need binary data to function, and upstream was shipping this
+data inside their sources. This was resulting in very large source files that
+took hours to build on some architectures, producing unacceptably high build
+times:
+
+  https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=921256
+  https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=920894
+
+I resolve this by patching the sources to ship that data in separate binary
+files to be read-in at runtime from /usr/share/apriltag. These can be updated by
+"debian/rules tags-bindata". This is run manually (to avoid tickling the above
+bugs), with the results committed to the repo
+
+ -- Dima Kogan <dkogan@debian.org>, Sun, 28 Mar 2021 14:52:28 -0700

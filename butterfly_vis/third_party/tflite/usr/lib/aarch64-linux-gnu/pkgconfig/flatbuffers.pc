@@ -1,0 +1,9 @@
+libdir=/usr/lib/aarch64-linux-gnu
+includedir=/usr/include
+
+Name: FlatBuffers
+Description: Memory Efficient Serialization Library
+Version: 24.3.25
+
+Libs: -L${libdir} -lflatbuffers
+Cflags: -I${includedir}

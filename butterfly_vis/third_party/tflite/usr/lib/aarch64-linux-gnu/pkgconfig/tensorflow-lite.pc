@@ -1,0 +1,13 @@
+prefix=/usr
+libdir=${prefix}/lib/aarch64-linux-gnu
+includedir=${prefix}/include
+
+Name: tensorflow-lite
+Description: Raspberry Pi build of TensorFlow Lite.
+URL: https://www.tensorflow.org/lite
+Version: 2.20.0
+Requires:
+Libs: -L${libdir} -ltensorflow-lite
+Cflags: -I${includedir}
+Requires.private:
+Libs.private: -L${libdir} -lfarmhash -lpthreadpool -lXNNPACK -labsl_raw_hash_set -labsl_hash -lcpuinfo -labsl_raw_logging_internal -absl_synchronization -lpthread

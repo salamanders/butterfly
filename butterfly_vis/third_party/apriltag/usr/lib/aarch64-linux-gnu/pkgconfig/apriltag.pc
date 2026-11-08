@@ -1,0 +1,4 @@
+Name: apriltag
+Description: AprilTag is a visual fiducial system popular for robotics research.
+Version: 3.4.2
+Libs: -lapriltag

@@ -1,0 +1,21 @@
+[Unit]
+Description=1080p60 3D Butterfly Kaleidoscope (DRM/KMS + V4L2 Vision)
+After=local-fs.target systemd-udev-settle.service
+Conflicts=getty@tty1.service
+ConditionPathExists=/home/benjamin/butterfly/butterfly_vis/butterfly_vis
+
+[Service]
+Type=simple
+User=benjamin
+Group=benjamin
+SupplementaryGroups=video render input
+WorkingDirectory=/home/benjamin/butterfly/butterfly_vis
+ExecStart=/home/benjamin/butterfly/butterfly_vis/butterfly_vis --count 75 --wait-hardware
+Restart=always
+RestartSec=2
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

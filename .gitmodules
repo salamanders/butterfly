@@ -1,0 +1,4 @@
+[submodule "butterfly_vis/third_party/raylib"]
+	path = butterfly_vis/third_party/raylib
+	url = https://github.com/raysan5/raylib.git
+	ignore = dirty
