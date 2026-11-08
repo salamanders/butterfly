@@ -21,12 +21,13 @@ void main() {
 
     // Smooth dorsal/ventral blend across grazing angles so curved wings never snap at gl_FrontFacing
     float facing = dot(dorsalN, V);
-    float dorsalFactor = smoothstep(-0.15, 0.15, facing);
+    float dorsalFactor = smoothstep(-0.18, 0.18, facing);
     vec3 N = normalize(dorsalN * (facing >= 0.0 ? 1.0 : -1.0));
 
-    // Ventral (underside) of butterfly wings is slightly softer than dorsal topside,
-    // but kept luminous so wings never look dull or muddy in shadow
-    vec3 ventralAlbedo = tex.rgb * vec3(0.92, 0.90, 0.94);
+    // Ventral (underside) is warmer, slightly softer, and more matte than the dorsal topside
+    // so snapping the wings open creates a vivid "Morpho jewel flash" on every downstroke hold
+    float texLuma = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 ventralAlbedo = mix(vec3(texLuma) * vec3(0.84, 0.78, 0.70), tex.rgb * 0.76, 0.60);
     vec3 baseAlbedo = mix(ventralAlbedo, tex.rgb, dorsalFactor);
 
     // Per-species bioluminescent accent & iridescent shimmer palette
@@ -84,9 +85,9 @@ void main() {
     vec3 velvetBlack = mix(vec3(0.09, 0.09, 0.11), bioTint * 0.22, 0.35);
     baseAlbedo = max(baseAlbedo, velvetBlack);
 
-    // Boost jewel-tone vibrance so colors gleam against the #000000 background
+    // Boost jewel-tone vibrance on dorsal topside so open-wing poses gleam against #000000
     float newLuma = dot(baseAlbedo, vec3(0.299, 0.587, 0.114));
-    baseAlbedo = clamp(mix(vec3(newLuma), baseAlbedo, 1.36), 0.0, 1.0);
+    baseAlbedo = clamp(mix(vec3(newLuma), baseAlbedo, mix(1.12, 1.42, dorsalFactor)), 0.0, 1.0);
 
     // 1. Stained-glass two-sided lighting with high self-luminous floor (never dark in shadow)
     float ndotl = max(dot(N, L), 0.0) + 0.58 * max(dot(-N, L), 0.0);
@@ -100,18 +101,19 @@ void main() {
     float membrane  = smoothstep(0.06, 0.55, newLuma);
     vec3 sss = mix(baseAlbedo, bioTint, 0.35) * sssFactor * (0.28 + 0.65 * membrane);
 
-    // 3. All-Species Structural Iridescence + Wingtip Rim Luminescence
+    // 3. All-Species Structural Iridescence + Wingtip Rim Luminescence (concentrated on dorsal topside)
+    float dorsalShimmer = mix(0.24, 1.00, dorsalFactor);
     float ndotv = clamp(abs(dot(N, V)), 0.0, 1.0);
     float fresnel = pow(1.0 - ndotv, 1.75);
     float edgeGlow = smoothstep(0.28, 0.88, wingSpan);
     vec3 iridTint = mix(iridHueA, iridHueB, clamp(fresnel * 0.75 + edgeGlow * 0.35, 0.0, 1.0));
-    vec3 iridescence = iridTint * iridStrength * (0.45 + 0.55 * ndotl) * (0.28 + 0.72 * max(fresnel, edgeGlow * 0.65));
+    vec3 iridescence = iridTint * (iridStrength * dorsalShimmer) * (0.45 + 0.55 * ndotl) * (0.28 + 0.72 * max(fresnel, edgeGlow * 0.65));
 
-    // 4. Microscopic Wing-Scale Shimmer (twinkles along outer wing scales as wings beat)
+    // 4. Microscopic Wing-Scale Shimmer (twinkles along outer dorsal wing scales as wings beat)
     vec2 scaleGrid = v_uv * 115.0 + dorsalN.xy * 9.5;
     float sparkleWave = sin(scaleGrid.x) * sin(scaleGrid.y) * cos((scaleGrid.x - scaleGrid.y) * 0.7);
     float sparkle = pow( clamp(sparkleWave, 0.0, 1.0), 5.0 ) * (0.35 + 0.65 * edgeGlow);
-    vec3 scaleShimmer = mix(iridHueA, vec3(1.0, 0.97, 0.88), 0.55) * sparkle * 0.55;
+    vec3 scaleShimmer = mix(iridHueA, vec3(1.0, 0.97, 0.88), 0.55) * sparkle * (0.58 * dorsalShimmer);
 
     // 5. Subtle specular highlight on dark chitin body and wing ribs
     vec3 H = normalize(L + V);

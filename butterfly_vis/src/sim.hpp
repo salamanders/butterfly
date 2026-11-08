@@ -440,9 +440,11 @@ public:
                     a.vel = rem * (appSpd / remDist);
                     a.pos += a.vel * dt;
                     a.phase += a.flap_freq * kTwoPi * dt;
-                    float s01 = 0.5f + 0.5f * std::sin(a.phase);
-                    a.wing_angle = 0.36f + s01 * 1.04f;
-                    a.wing_flex  = -std::cos(a.phase) * 0.25f;
+                    float skewPhase = a.phase - 0.30f * std::sin(a.phase);
+                    float raw01 = 0.5f + 0.5f * std::sin(skewPhase);
+                    float s01 = raw01 * std::sqrt(raw01);
+                    a.wing_angle = 0.22f + s01 * 1.18f;
+                    a.wing_flex  = -std::cos(skewPhase) * 0.34f;
 
                     Vector3 desFwd = safeNormalize({rem.x, rem.y, rem.z * 0.3f}, {0.0f, 1.0f, 0.0f});
                     float bBlend = std::min(1.0f, dt * 6.0f);
@@ -596,39 +598,44 @@ public:
                     meadowPull = (meadowHome - a.pos) * 0.45f;
                 }
 
-                Vector3 turb = evalCurlTurbulence(a.pos, simTime, a.noise_seed);
-                Vector3 accel = sepForce * 1.15f + currentForce + meadowPull + boundForce + turb * 0.75f;
+        // Species-specific glide V-dihedral angles:
+        // Large soarers (Monarch, Morpho, Swallowtails) hold a broader +45..+49 deg V;
+        // Smaller agile darters (Question Mark, Cabbage White, Red Admiral, Buckeye) hold a sleeker +55..+60 deg V
+        static constexpr float kSpeciesGlideRad[8] = {
+            0.82f,  0.78f,  0.84f,  0.98f,  1.04f,  0.96f,  0.86f,  1.00f
+        };
 
-                // Flap-and-Glide State Machine
-                bool soaringSpecies = (a.species_id == 0 || a.species_id == 1 || a.species_id == 2 || a.species_id == 6);
+        Vector3 turb = evalCurlTurbulence(a.pos, simTime, a.noise_seed);
+        bool soaringSpecies = (a.species_id == 0 || a.species_id == 1 || a.species_id == 2 || a.species_id == 6);
+        Vector3 accel = sepForce * 1.15f + currentForce + meadowPull + boundForce + turb * (soaringSpecies ? 0.72f : 1.05f);
 
-                // If a gliding butterfly reaches the screen boundary and needs to turn back,
-                // it must resume flapping first (turning is only possible while flapping).
-                if (a.state == STATE_GLIDING && Vector3LengthSqr(boundForce) > 0.01f) {
-                    a.state = STATE_FLAPPING;
-                    a.phase = 0.36f;
-                    a.state_timer = randRange(a.rng, 0.90f, 1.60f);
-                }
+        // If a gliding butterfly reaches the screen boundary or crowds into another butterfly,
+        // it resumes flapping first so it can actively bank and steer clear without stacking.
+        if (a.state == STATE_GLIDING && (Vector3LengthSqr(boundForce) > 0.01f || Vector3LengthSqr(sepForce) > 0.06f)) {
+            a.state = STATE_FLAPPING;
+            a.phase = 2.38f; // Begin brisk peel-and-downstroke from folded glide V
+            a.state_timer = randRange(a.rng, 0.90f, 1.60f);
+        }
 
-                a.state_timer -= dt;
-                if (a.state == STATE_GLIDING) {
-                    if (a.state_timer <= 0.0f) {
-                        a.state = STATE_FLAPPING;
-                        // Start stroke smoothly from the ~54-deg (0.94 rad) folded glide angle so wings never snap
-                        a.phase = 0.36f;
-                        a.state_timer = soaringSpecies
-                            ? randRange(a.rng, 0.95f, 1.65f)  // 2-4 slow, languid wingbeats
-                            : randRange(a.rng, 0.85f, 1.55f); // 3-6 livelier flitting beats
-                    }
-                } else {
-                    // Transition into a straight-line downward glide seamlessly as wings pass the ~54-deg folded V angle
-                    if (a.state_timer <= 0.0f && std::sin(a.phase) > 0.15f && Vector3LengthSqr(boundForce) <= 0.01f) {
-                        float glideProb = soaringSpecies ? 0.85f : 0.55f;
-                        if (rand01(a.rng) < glideProb) {
-                            a.state = STATE_GLIDING;
-                            a.state_timer = soaringSpecies
-                                ? randRange(a.rng, 1.50f, 3.20f)  // Long, dreamy float-and-glide
-                                : randRange(a.rng, 0.65f, 1.40f); // Shorter glide for smaller flitting species
+        a.state_timer -= dt;
+        if (a.state == STATE_GLIDING) {
+            if (a.state_timer <= 0.0f) {
+                a.state = STATE_FLAPPING;
+                // Start downstroke smoothly from the folded glide angle so wings never snap
+                a.phase = 2.38f;
+                a.state_timer = soaringSpecies
+                    ? randRange(a.rng, 1.00f, 1.75f)  // 2-4 slow, languid wingbeats
+                    : randRange(a.rng, 0.65f, 1.25f); // Crisp 2-4 beat darter bursts
+            }
+        } else {
+            // Transition into a straight-line downward glide seamlessly as wings rise through the glide V
+            if (a.state_timer <= 0.0f && std::sin(a.phase) > 0.35f && Vector3LengthSqr(boundForce) <= 0.01f) {
+                float glideProb = soaringSpecies ? 0.85f : 0.60f;
+                if (rand01(a.rng) < glideProb) {
+                    a.state = STATE_GLIDING;
+                    a.state_timer = soaringSpecies
+                        ? randRange(a.rng, 1.60f, 3.30f)  // Long, dreamy float-and-glide
+                        : randRange(a.rng, 0.55f, 1.20f); // Quick float-hold between darter bursts
 
                             // Lock into a straight-line downward-drifting glide vector toward bottom of screen
                             float horizSpd = std::hypot(a.vel.x, a.vel.z);
@@ -649,27 +656,34 @@ public:
                     a.phase += a.flap_freq * excitement * kTwoPi * dt;
                     if (a.phase > 100.0f * kTwoPi) a.phase -= 100.0f * kTwoPi;
 
-                    // Lingering open-V stroke curve: wings spend slightly longer near the open +21 deg V
-                    // and fold up softly to +80 deg above the back
-                    float raw01 = 0.5f + 0.5f * std::sin(a.phase);
+                    // Cel-animation + biomechanical "Snap-and-Hold" stroke curve:
+                    // 1. Asymmetric timing (skewPhase): fast ~34% downstroke snap, softer ~66% feathered upstroke
+                    // 2. Open-wing pose hold (raw01^1.5): cushions spacing at the +12 deg (0.20 rad) wide-open V
+                    //    pose so the full museum wing pattern flashes clearly to the eye on every beat without
+                    //    flipping edge-on, then sweeps up to a +80 deg (1.40 rad) dorsal clap-and-peel peak.
+                    float skewPhase = a.phase - 0.32f * std::sin(a.phase);
+                    float raw01 = 0.5f + 0.5f * std::sin(skewPhase);
                     float s01 = raw01 * std::sqrt(raw01); // pow(raw01, 1.5) without std::pow overhead
-                    float targetAngle = 0.36f + s01 * 1.04f;
-                    // Strong 90-deg quadrature wave (-cos) drives forewing-to-hindwing trailing cloth lag & breaststroke pitch
-                    float downstrokePhase = -std::cos(a.phase); // +1 on power downstroke, -1 on recovery upstroke
-                    float targetFlex  = downstrokePhase * 0.48f;
-                    float blend = std::min(1.0f, dt * 16.0f);
+                    float targetAngle = 0.20f + s01 * 1.20f;
+
+                    // Quadrature C-curve whip & 3D pronation/supination twist wave:
+                    // Sharper positive impulse during the fast downstroke snap, softer negative feathering on upstroke
+                    float downstrokePhase = -std::cos(skewPhase) * (1.0f - 0.22f * std::cos(a.phase));
+                    float targetFlex  = downstrokePhase * 0.44f;
+                    float blend = std::min(1.0f, dt * 18.0f);
                     a.wing_angle = std::lerp(a.wing_angle, targetAngle, blend);
                     a.wing_flex  = std::lerp(a.wing_flex,  targetFlex,  blend);
 
-                    // Upward climb bias while flapping (duty-cycle balanced against downward glide sink)
-                    // plus breaststroke lift & forward surge on power downstroke
-                    float climbBias = soaringSpecies ? 0.52f : 0.24f;
-                    accel.y += climbBias + downstrokePhase * 0.42f;
-                    surge = 1.0f + 0.36f * downstrokePhase;
+                    // Phase-delayed (~35 deg) body counter-bounce & forward surge (overlapping action):
+                    // Right after the wings snap down, the lightweight body pops upward and surges forward
+                    float delayedBounce = -std::cos(a.phase - 0.58f);
+                    float climbBias = soaringSpecies ? 0.54f : 0.28f;
+                    accel.y += climbBias + delayedBounce * (soaringSpecies ? 0.56f : 0.74f);
+                    surge = 1.0f + (soaringSpecies ? 0.36f : 0.46f) * delayedBounce;
 
                     // Turning and speed changes only occur while actively flapping
                     a.vel += accel * dt;
-                    a.vel.y = std::clamp(a.vel.y, soaringSpecies ? -0.10f : -0.20f, 0.52f);
+                    a.vel.y = std::clamp(a.vel.y, soaringSpecies ? -0.14f : -0.24f, 0.64f);
                     float spdSq = Vector3LengthSqr(a.vel);
                     float minSpd = soaringSpecies ? 0.28f : 0.36f;
                     float maxSpd = soaringSpecies ? 0.58f : 0.68f;
@@ -698,9 +712,10 @@ public:
                     a.up = safeNormalize(Vector3Lerp(a.up, targetUp, upBlend), targetUp);
                 } else {
                     float damp = std::min(1.0f, dt * 8.0f);
-                    // Glide in a more folded ~54-deg upward V-dihedral (0.94 rad) so gliding butterflies read as
-                    // sleek 3D V-profiles traveling forward rather than wide-open kites sliding sideways
-                    a.wing_angle = std::lerp(a.wing_angle, 0.94f,  damp);
+                    // Glide in a species-specific upward V-dihedral (+45..+49 deg for large soarers,
+                    // +55..+60 deg for smaller darters, plus subtle per-individual variation)
+                    float targetGlideAngle = kSpeciesGlideRad[a.species_id & 7u] + 0.04f * std::sin(a.noise_seed);
+                    a.wing_angle = std::lerp(a.wing_angle, targetGlideAngle, damp);
                     a.wing_flex  = std::lerp(a.wing_flex, -0.04f, damp);
                     surge = 0.95f;
 
