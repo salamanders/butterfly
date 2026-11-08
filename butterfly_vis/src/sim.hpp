@@ -248,8 +248,8 @@ public:
             a.species_id = uint32_t(i % 8);
 
             a.pos = {
-                randRange(a.rng, -3.5f, 3.5f),
-                randRange(a.rng, -1.9f, 1.9f),
+                randRange(a.rng, -3.70f, 3.70f),
+                randRange(a.rng, -2.05f, 2.05f),
                 randRange(a.rng, -4.2f, 1.0f)
             };
 
@@ -576,23 +576,23 @@ public:
                     excitement = wp.is_steady ? 0.92f : 1.05f;
                 }
 
-                // Soft boundary return force keeping butterflies inside the 1080p orthographic wall
+                // Soft boundary return force keeping butterflies inside the full 1080p orthographic wall ([-4.0..+4.0] x [-2.25..+2.25])
                 Vector3 boundForce = Vector3Zero();
-                if (a.pos.x >  3.50f) boundForce.x -= (a.pos.x - 3.50f) * 1.8f;
-                if (a.pos.x < -3.50f) boundForce.x -= (a.pos.x + 3.50f) * 1.8f;
-                if (a.pos.y >  1.85f) boundForce.y -= (a.pos.y - 1.85f) * 2.0f;
-                if (a.pos.y < -1.85f) boundForce.y -= (a.pos.y + 1.85f) * 2.0f;
+                if (a.pos.x >  3.80f) boundForce.x -= (a.pos.x - 3.80f) * 1.8f;
+                if (a.pos.x < -3.80f) boundForce.x -= (a.pos.x + 3.80f) * 1.8f;
+                if (a.pos.y >  2.08f) boundForce.y -= (a.pos.y - 2.08f) * 2.0f;
+                if (a.pos.y < -2.10f) boundForce.y -= (a.pos.y + 2.10f) * 2.0f;
                 if (a.pos.z >  1.20f) boundForce.z -= (a.pos.z - 1.20f) * 1.8f;
                 if (a.pos.z < -4.40f) boundForce.z -= (a.pos.z + 4.40f) * 1.4f;
 
-                // Per-butterfly slowly wandering personal meadow spot across the interior of the screen
+                // Per-butterfly slowly wandering personal meadow spot across the full screen
                 // so mutual separation never pushes the population out to the perimeter walls
                 Vector3 meadowPull = Vector3Zero();
                 if (engagedPalm < 0) {
                     auto fi = float(i);
                     Vector3 meadowHome = {
-                        3.05f * std::sin(simTime * 0.21f + a.noise_seed + fi * 2.39996f),
-                        1.58f * std::cos(simTime * 0.27f + a.noise_seed * 1.3f + fi * std::numbers::phi_v<float>),
+                        3.40f * std::sin(simTime * 0.21f + a.noise_seed + fi * 2.39996f),
+                        1.96f * std::cos(simTime * 0.27f + a.noise_seed * 1.3f + fi * std::numbers::phi_v<float>),
                         -1.60f + 1.40f * std::sin(simTime * 0.19f + a.noise_seed * 0.7f + fi)
                     };
                     meadowPull = (meadowHome - a.pos) * 0.45f;
@@ -677,7 +677,7 @@ public:
                     // Phase-delayed (~35 deg) body counter-bounce & forward surge (overlapping action):
                     // Right after the wings snap down, the lightweight body pops upward and surges forward
                     float delayedBounce = -std::cos(a.phase - 0.58f);
-                    float climbBias = soaringSpecies ? 0.54f : 0.28f;
+                    float climbBias = soaringSpecies ? 0.34f : 0.16f;
                     accel.y += climbBias + delayedBounce * (soaringSpecies ? 0.56f : 0.74f);
                     surge = 1.0f + (soaringSpecies ? 0.36f : 0.46f) * delayedBounce;
 
