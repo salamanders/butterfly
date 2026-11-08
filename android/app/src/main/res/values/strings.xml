@@ -1,3 +1,7 @@
 <resources>
-    <string name="app_name">ButterflyScreen</string>
+    <string name="app_name">Kaleidoscope of Butterflies</string>
+    <string name="wallpaper_description">3D bioluminescent butterfly kaleidoscope for your lock screen</string>
+    <string name="label_butterfly_count">Number of butterflies</string>
+    <string name="label_zoom_level">Zoom level</string>
+    <string name="action_set_wallpaper">Set Wallpaper</string>
 </resources>

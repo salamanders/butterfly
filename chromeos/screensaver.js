@@ -995,7 +995,7 @@ function computeOrthoViewProj(orthoHalfW, orthoHalfH) {
     1.0 / orthoHalfW, 0.0, 0.0, 0.0,
     0.0, 1.0 / orthoHalfH, 0.0, 0.0,
     0.0, 0.0, -2.0 / (far - near), 0.0,
-    0.0, 0.0, -(far + near + 2.0 * camZ) / (far - near), 1.0
+    0.0, 0.0, -(far + near - 2.0 * camZ) / (far - near), 1.0
   ]);
 }
 
