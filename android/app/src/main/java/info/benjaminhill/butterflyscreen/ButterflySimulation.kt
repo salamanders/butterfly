@@ -4,7 +4,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -16,7 +15,8 @@ class ButterflySimulation(
 ) {
     companion object {
         const val MAX_BUTTERFLIES = ButterflyPrefs.MAX_COUNT
-        const val INSTANCE_STRIDE_BYTES = 52 // 13 * 4 bytes
+        const val INSTANCE_FLOATS = 13
+        const val INSTANCE_STRIDE_BYTES = INSTANCE_FLOATS * 4 // 52 bytes
         const val MAX_FAIRY_MOTES = 200
         const val MOTE_FLOATS_PER_VERT = 7 // x, y, u, v, r, g, b
 
@@ -26,16 +26,6 @@ class ButterflySimulation(
 
         private const val STATE_FLAPPING = 0
         private const val STATE_GLIDING = 1
-
-        private const val GRID_X = 16
-        private const val GRID_Y = 12
-        private const val GRID_Z = 16
-        private const val NUM_CELLS = GRID_X * GRID_Y * GRID_Z
-        private const val CELL_SIZE = 0.65f
-        private const val INV_CELL_SIZE = 1.0f / CELL_SIZE
-        private const val GRID_MIN_X = -5.2f
-        private const val GRID_MIN_Y = -5.2f
-        private const val GRID_MIN_Z = -7.2f
 
         private val SPECIES_SCALE =
             floatArrayOf(0.320f, 0.350f, 0.340f, 0.250f, 0.230f, 0.260f, 0.310f, 0.250f)
@@ -53,21 +43,6 @@ class ButterflySimulation(
             floatArrayOf(0.18f, 0.96f, 0.85f), // 6: Pipevine Swallowtail
             floatArrayOf(0.82f, 0.42f, 1.00f)  // 7: Buckeye
         )
-    }
-
-    private class PcgRng(seed: Int) {
-        private var state: Int = seed
-
-        fun next01(): Float {
-            val old = state
-            state = old * 747796405 + -1403630843 // 2891336453U as signed Int
-            val shift = (old ushr 28) + 4
-            val word = ((old ushr shift) xor old) * 277803737
-            val res = (word ushr 22) xor word
-            return (res and 0x00ffffff).toFloat() / 0x01000000.toFloat()
-        }
-
-        fun range(lo: Float, hi: Float): Float = lo + (hi - lo) * next01()
     }
 
     private class Agent(
@@ -92,8 +67,19 @@ class ButterflySimulation(
         val noiseSeed: Float,
         val baseScale: Float,
         val speciesId: Int,
-        val rng: PcgRng
-    )
+        var rngState: Int
+    ) {
+        fun next01(): Float {
+            val old = rngState
+            rngState = old * 747796405 + -1403630843 // 2891336453U as signed Int
+            val shift = (old ushr 28) + 4
+            val word = ((old ushr shift) xor old) * 277803737
+            val res = (word ushr 22) xor word
+            return (res and 0x00ffffff).toFloat() / 0x01000000.toFloat()
+        }
+
+        fun range(lo: Float, hi: Float): Float = lo + (hi - lo) * next01()
+    }
 
     private class FairyMote {
         var px = 0f
@@ -115,43 +101,69 @@ class ButterflySimulation(
     var zoomLevel: Float = initialZoom.coerceIn(ButterflyPrefs.MIN_ZOOM, ButterflyPrefs.MAX_ZOOM)
 
     private var simTime = 0.0f
-    private val cellHead = IntArray(NUM_CELLS)
-    private val nextAgent = IntArray(MAX_BUTTERFLIES)
     private val turbScratch = FloatArray(3)
     private val upScratch = FloatArray(3)
+    private val sortedIndices = IntArray(MAX_BUTTERFLIES) { it }
 
     private val agents: Array<Agent>
     private val motes: Array<FairyMote>
-    private val moteRng = PcgRng(77777)
+    private var moteRngState = 77777
 
-    val instanceBuffer: ByteBuffer =
-        ByteBuffer.allocateDirect(MAX_BUTTERFLIES * INSTANCE_STRIDE_BYTES)
+    private val instanceArray = FloatArray(MAX_BUTTERFLIES * INSTANCE_FLOATS)
+    val instanceBuffer: FloatBuffer =
+        ByteBuffer.allocateDirect(instanceArray.size * 4)
             .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
 
     private val moteArray = FloatArray(MAX_FAIRY_MOTES * 6 * MOTE_FLOATS_PER_VERT)
     val moteFloatBuffer: FloatBuffer =
         ByteBuffer.allocateDirect(moteArray.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
+    private fun nextMoteRange(lo: Float, hi: Float): Float {
+        val old = moteRngState
+        moteRngState = old * 747796405 + -1403630843
+        val shift = (old ushr 28) + 4
+        val word = ((old ushr shift) xor old) * 277803737
+        val res = (word ushr 22) xor word
+        val r01 = (res and 0x00ffffff).toFloat() / 0x01000000.toFloat()
+        return lo + (hi - lo) * r01
+    }
+
     init {
         agents = Array(MAX_BUTTERFLIES) { i ->
-            val rng = PcgRng(1337 + i * 9781)
             val sp = i % 8
-            val headingAng = rng.range(0.0f, TWO_PI)
+            val a = Agent(
+                px = 0f, py = 0f, pz = 0f,
+                vx = 0f, vy = 0f, vz = 0f,
+                fx = 0f, fy = 0f, fz = 1f,
+                ux = 0f, uy = 1f, uz = 0f,
+                phase = 0f,
+                flapFreq = 1f,
+                wingAngle = 0.56f,
+                wingFlex = 0.0f,
+                state = STATE_FLAPPING,
+                stateTimer = 1f,
+                noiseSeed = 0f,
+                baseScale = SPECIES_SCALE[sp],
+                speciesId = sp,
+                rngState = 1337 + i * 9781
+            )
+            val headingAng = a.range(0.0f, TWO_PI)
             var dx = cos(headingAng)
-            var dy = rng.range(-0.35f, 0.35f)
+            var dy = a.range(-0.35f, 0.35f)
             var dz = sin(headingAng) * 0.35f
-            val dlen = hypot(dx, hypot(dy, dz)).let { if (it < 1e-5f) 1.0f else it }
+            val dlen = sqrt(dx * dx + dy * dy + dz * dz).let { if (it < 1e-5f) 1.0f else it }
             dx /= dlen
             dy /= dlen
             dz /= dlen
 
-            val spd = rng.range(0.32f, 0.58f)
-            computeRolledUp(dx, dy, dz, rng.range(-0.45f, 0.75f), upScratch)
+            val spd = a.range(0.32f, 0.58f)
+            computeRolledUp(dx, dy, dz, a.range(-0.45f, 0.75f), upScratch)
 
             Agent(
-                px = rng.range(-1.40f, 1.40f),
-                py = rng.range(-2.60f, 2.60f),
-                pz = rng.range(-4.20f, 1.00f),
+                px = a.range(-1.40f, 1.40f),
+                py = a.range(-2.60f, 2.60f),
+                pz = a.range(-4.20f, 1.00f),
                 vx = dx * spd,
                 vy = dy * spd,
                 vz = dz * spd,
@@ -161,18 +173,21 @@ class ButterflySimulation(
                 ux = upScratch[0],
                 uy = upScratch[1],
                 uz = upScratch[2],
-                phase = rng.range(0.0f, TWO_PI),
-                flapFreq = SPECIES_FLAP_HZ[sp] * rng.range(0.92f, 1.08f),
+                phase = a.range(0.0f, TWO_PI),
+                flapFreq = SPECIES_FLAP_HZ[sp] * a.range(0.92f, 1.08f),
                 wingAngle = 0.56f,
                 wingFlex = 0.0f,
-                state = if (rng.next01() < 0.45f) STATE_GLIDING else STATE_FLAPPING,
-                stateTimer = rng.range(0.6f, 2.4f),
-                noiseSeed = rng.range(0.0f, 100.0f),
-                baseScale = SPECIES_SCALE[sp] * rng.range(0.92f, 1.08f),
+                state = if (a.next01() < 0.45f) STATE_GLIDING else STATE_FLAPPING,
+                stateTimer = a.range(0.6f, 2.4f),
+                noiseSeed = a.range(0.0f, 100.0f),
+                baseScale = SPECIES_SCALE[sp] * a.range(0.92f, 1.08f),
                 speciesId = sp,
-                rng = rng
+                rngState = a.rngState
             ).also { writeInstance(i, it) }
         }
+        instanceBuffer.position(0)
+        instanceBuffer.put(instanceArray, 0, activeCount * INSTANCE_FLOATS)
+        instanceBuffer.position(0)
 
         motes = Array(MAX_FAIRY_MOTES) { m ->
             FairyMote().also {
@@ -182,21 +197,21 @@ class ButterflySimulation(
     }
 
     private fun writeInstance(idx: Int, a: Agent) {
-        val base = idx * INSTANCE_STRIDE_BYTES
-        val buf = instanceBuffer
-        buf.putFloat(base + 0, a.px)
-        buf.putFloat(base + 4, a.py)
-        buf.putFloat(base + 8, a.pz)
-        buf.putFloat(base + 12, a.fx)
-        buf.putFloat(base + 16, a.fy)
-        buf.putFloat(base + 20, a.fz)
-        buf.putFloat(base + 24, a.ux)
-        buf.putFloat(base + 28, a.uy)
-        buf.putFloat(base + 32, a.uz)
-        buf.putFloat(base + 36, a.wingAngle)
-        buf.putFloat(base + 40, a.wingFlex)
-        buf.putFloat(base + 44, a.baseScale * zoomLevel)
-        buf.putInt(base + 48, a.speciesId)
+        val base = idx * INSTANCE_FLOATS
+        val out = instanceArray
+        out[base + 0] = a.px
+        out[base + 1] = a.py
+        out[base + 2] = a.pz
+        out[base + 3] = a.fx
+        out[base + 4] = a.fy
+        out[base + 5] = a.fz
+        out[base + 6] = a.ux
+        out[base + 7] = a.uy
+        out[base + 8] = a.uz
+        out[base + 9] = a.wingAngle
+        out[base + 10] = a.wingFlex
+        out[base + 11] = a.baseScale * zoomLevel
+        out[base + 12] = Float.fromBits(a.speciesId)
     }
 
     private fun spawnMoteOnButterfly(
@@ -209,26 +224,25 @@ class ButterflySimulation(
         var rx = b.fy * b.uz - b.fz * b.uy
         var ry = b.fz * b.ux - b.fx * b.uz
         var rz = b.fx * b.uy - b.fy * b.ux
-        val rlen = hypot(rx, hypot(ry, rz)).let { if (it < 1e-5f) 1.0f else it }
+        val rlen = sqrt(rx * rx + ry * ry + rz * rz).let { if (it < 1e-5f) 1.0f else it }
         rx /= rlen
         ry /= rlen
         rz /= rlen
 
         val side = if ((mIdx and 1) != 0) 0.70f else -0.70f
         val scaledSpan = side * b.baseScale * zoomLevel
-        val rng = moteRng
-        m.px = b.px + rx * scaledSpan + rng.range(-0.06f, 0.06f)
-        m.py = b.py + ry * scaledSpan + rng.range(-0.06f, 0.06f)
-        m.pz = b.pz + rz * scaledSpan + rng.range(-0.05f, 0.05f)
+        m.px = b.px + rx * scaledSpan + nextMoteRange(-0.06f, 0.06f)
+        m.py = b.py + ry * scaledSpan + nextMoteRange(-0.06f, 0.06f)
+        m.pz = b.pz + rz * scaledSpan + nextMoteRange(-0.05f, 0.05f)
 
-        m.vx = b.vx * 0.18f + rng.range(-0.10f, 0.10f)
-        m.vy = b.vy * 0.18f + rng.range(-0.06f, 0.12f)
-        m.vz = b.vz * 0.18f + rng.range(-0.05f, 0.05f)
+        m.vx = b.vx * 0.18f + nextMoteRange(-0.10f, 0.10f)
+        m.vy = b.vy * 0.18f + nextMoteRange(-0.06f, 0.12f)
+        m.vz = b.vz * 0.18f + nextMoteRange(-0.05f, 0.05f)
 
-        m.maxAge = rng.range(1.50f, 2.90f)
-        m.age = if (initialRandomAge) rng.range(0.0f, m.maxAge) else 0.0f
-        m.sizePx = rng.range(5.5f, 11.5f)
-        m.phase = rng.range(0.0f, TWO_PI)
+        m.maxAge = nextMoteRange(1.50f, 2.90f)
+        m.age = if (initialRandomAge) nextMoteRange(0.0f, m.maxAge) else 0.0f
+        m.sizePx = nextMoteRange(5.5f, 11.5f)
+        m.phase = nextMoteRange(0.0f, TWO_PI)
 
         val col = MOTE_COLORS[b.speciesId and 7]
         m.r = col[0]
@@ -243,21 +257,6 @@ class ButterflySimulation(
 
         val count = activeCount.coerceIn(ButterflyPrefs.MIN_COUNT, MAX_BUTTERFLIES)
 
-        // 1. Rebuild flat O(N) spatial hash grid
-        cellHead.fill(-1)
-        for (i in 0 until count) {
-            val a = agents[i]
-            val cx = ((a.px - GRID_MIN_X) * INV_CELL_SIZE).toInt().coerceIn(0, GRID_X - 1)
-            val cy = ((a.py - GRID_MIN_Y) * INV_CELL_SIZE).toInt().coerceIn(0, GRID_Y - 1)
-            val cz = ((a.pz - GRID_MIN_Z) * INV_CELL_SIZE).toInt().coerceIn(0, GRID_Z - 1)
-            val cellIdx = (cz * GRID_Y + cy) * GRID_X + cx
-            nextAgent[i] = cellHead[cellIdx]
-            cellHead[cellIdx] = i
-        }
-
-        val sepRadius = 0.62f
-        val sepRadiusSq = sepRadius * sepRadius
-
         // Adapt bounds smoothly to both portrait and landscape phone screens
         val margin = 0.18f * zoomLevel.coerceAtMost(1.8f)
         val boundMaxX = max(0.75f, orthoHalfW - margin)
@@ -268,48 +267,6 @@ class ButterflySimulation(
 
         for (i in 0 until count) {
             val a = agents[i]
-
-            val cx = ((a.px - GRID_MIN_X) * INV_CELL_SIZE).toInt().coerceIn(0, GRID_X - 1)
-            val cy = ((a.py - GRID_MIN_Y) * INV_CELL_SIZE).toInt().coerceIn(0, GRID_Y - 1)
-            val cz = ((a.pz - GRID_MIN_Z) * INV_CELL_SIZE).toInt().coerceIn(0, GRID_Z - 1)
-
-            var sepX = 0.0f
-            var sepY = 0.0f
-            var sepZ = 0.0f
-            val zMin = max(0, cz - 1)
-            val zMax = min(GRID_Z - 1, cz + 1)
-            val yMin = max(0, cy - 1)
-            val yMax = min(GRID_Y - 1, cy + 1)
-            val xMin = max(0, cx - 1)
-            val xMax = min(GRID_X - 1, cx + 1)
-
-            var neighborsChecked = 0
-            for (nz in zMin..zMax) {
-                for (ny in yMin..yMax) {
-                    for (nx in xMin..xMax) {
-                        var j = cellHead[(nz * GRID_Y + ny) * GRID_X + nx]
-                        while (j != -1 && neighborsChecked < 16) {
-                            if (j != i) {
-                                val b = agents[j]
-                                val dx = a.px - b.px
-                                val dy = a.py - b.py
-                                val dz = a.pz - b.pz
-                                val d2 = dx * dx + dy * dy + dz * dz
-                                if (d2 > 1e-6f && d2 < sepRadiusSq) {
-                                    val invD = 1.0f / sqrt(d2)
-                                    val push = (sepRadius - (1.0f / invD)) / sepRadius
-                                    val w = invD * push
-                                    sepX += dx * w
-                                    sepY += dy * w
-                                    sepZ += dz * w
-                                }
-                                ++neighborsChecked
-                            }
-                            j = nextAgent[j]
-                        }
-                    }
-                }
-            }
 
             // Soft boundary return force keeping butterflies inside full screen
             var boundX = 0.0f
@@ -337,17 +294,16 @@ class ButterflySimulation(
                 (a.speciesId == 0 || a.speciesId == 1 || a.speciesId == 2 || a.speciesId == 6)
             val turbMul = if (soaringSpecies) 0.72f else 1.05f
 
-            val accelX = sepX * 1.15f + meadowX + boundX + turbScratch[0] * turbMul
-            var accelY = sepY * 1.15f + meadowY + boundY + turbScratch[1] * turbMul
-            val accelZ = sepZ * 1.15f + meadowZ + boundZ + turbScratch[2] * turbMul
+            val accelX = meadowX + boundX + turbScratch[0] * turbMul
+            var accelY = meadowY + boundY + turbScratch[1] * turbMul
+            val accelZ = meadowZ + boundZ + turbScratch[2] * turbMul
 
             val boundLenSq = boundX * boundX + boundY * boundY + boundZ * boundZ
-            val sepLenSq = sepX * sepX + sepY * sepY + sepZ * sepZ
 
-            if (a.state == STATE_GLIDING && (boundLenSq > 0.01f || sepLenSq > 0.06f)) {
+            if (a.state == STATE_GLIDING && boundLenSq > 0.01f) {
                 a.state = STATE_FLAPPING
                 a.phase = 2.38f
-                a.stateTimer = a.rng.range(0.90f, 1.60f)
+                a.stateTimer = a.range(0.90f, 1.60f)
             }
 
             a.stateTimer -= dt
@@ -356,19 +312,19 @@ class ButterflySimulation(
                     a.state = STATE_FLAPPING
                     a.phase = 2.38f
                     a.stateTimer =
-                        if (soaringSpecies) a.rng.range(1.00f, 1.75f) else a.rng.range(0.65f, 1.25f)
+                        if (soaringSpecies) a.range(1.00f, 1.75f) else a.range(0.65f, 1.25f)
                 }
             } else {
                 if (a.stateTimer <= 0.0f && sin(a.phase) > 0.35f && boundLenSq <= 0.01f) {
                     val glideProb = if (soaringSpecies) 0.85f else 0.60f
-                    if (a.rng.next01() < glideProb) {
+                    if (a.next01() < glideProb) {
                         a.state = STATE_GLIDING
                         a.stateTimer =
-                            if (soaringSpecies) a.rng.range(1.60f, 3.30f) else a.rng.range(
+                            if (soaringSpecies) a.range(1.60f, 3.30f) else a.range(
                                 0.55f,
                                 1.20f
                             )
-                        val horizSpd = hypot(a.vx, a.vz)
+                        val horizSpd = sqrt(a.vx * a.vx + a.vz * a.vz)
                         val targetHoriz =
                             horizSpd.coerceIn(0.24f, if (soaringSpecies) 0.44f else 0.52f)
                         val hx =
@@ -378,7 +334,7 @@ class ButterflySimulation(
                         a.vz = hz * targetHoriz
                         a.vy = if (soaringSpecies) -0.17f else -0.20f
                     } else {
-                        a.stateTimer = a.rng.range(0.80f, 1.50f)
+                        a.stateTimer = a.range(0.80f, 1.50f)
                     }
                 }
             }
@@ -411,7 +367,7 @@ class ButterflySimulation(
                 a.vz += accelZ * dt
                 a.vy = a.vy.coerceIn(if (soaringSpecies) -0.14f else -0.24f, 0.64f)
 
-                val spd = hypot(a.vx, hypot(a.vy, a.vz))
+                val spd = sqrt(a.vx * a.vx + a.vy * a.vy + a.vz * a.vz)
                 val minSpd = if (soaringSpecies) 0.28f else 0.36f
                 val maxSpd = if (soaringSpecies) 0.58f else 0.68f
                 if (spd > 1e-5f) {
@@ -428,7 +384,7 @@ class ButterflySimulation(
                 var dfx = a.vx
                 var dfy = a.vy * 0.85f
                 var dfz = a.vz * 0.45f
-                val dflen = hypot(dfx, hypot(dfy, dfz))
+                val dflen = sqrt(dfx * dfx + dfy * dfy + dfz * dfz)
                 if (dflen > 1e-5f) {
                     dfx /= dflen; dfy /= dflen; dfz /= dflen
                 } else {
@@ -438,7 +394,7 @@ class ButterflySimulation(
                 a.fx = lerp(a.fx, dfx, fBlend)
                 a.fy = lerp(a.fy, dfy, fBlend)
                 a.fz = lerp(a.fz, dfz, fBlend)
-                val flen = hypot(a.fx, hypot(a.fy, a.fz)).let { if (it < 1e-5f) 1.0f else it }
+                val flen = sqrt(a.fx * a.fx + a.fy * a.fy + a.fz * a.fz).let { if (it < 1e-5f) 1.0f else it }
                 a.fx /= flen; a.fy /= flen; a.fz /= flen
 
                 // 3D roll around forward axis
@@ -452,7 +408,7 @@ class ButterflySimulation(
                 a.ux = lerp(a.ux, upScratch[0], upBlend)
                 a.uy = lerp(a.uy, upScratch[1], upBlend)
                 a.uz = lerp(a.uz, upScratch[2], upBlend)
-                val ulen = hypot(a.ux, hypot(a.uy, a.uz)).let { if (it < 1e-5f) 1.0f else it }
+                val ulen = sqrt(a.ux * a.ux + a.uy * a.uy + a.uz * a.uz).let { if (it < 1e-5f) 1.0f else it }
                 a.ux /= ulen; a.uy /= ulen; a.uz /= ulen
             } else {
                 val damp = min(1.0f, dt * 8.0f)
@@ -465,7 +421,7 @@ class ButterflySimulation(
                 if (a.vy > -0.14f) {
                     a.vy = if (soaringSpecies) -0.17f else -0.20f
                 }
-                val spd = hypot(a.vx, hypot(a.vy, a.vz))
+                val spd = sqrt(a.vx * a.vx + a.vy * a.vy + a.vz * a.vz)
                 val minGlide = if (soaringSpecies) 0.26f else 0.32f
                 val maxGlide = if (soaringSpecies) 0.50f else 0.58f
                 val glideSpd = (spd * (1.0f - 0.12f * dt)).coerceIn(minGlide, maxGlide)
@@ -477,9 +433,9 @@ class ButterflySimulation(
                 var gfx = a.vx
                 var gfy = a.vy * 0.85f
                 var gfz = a.vz * 0.45f
-                val gflen = hypot(gfx, hypot(gfy, gfz))
+                val gflen = sqrt(gfx * gfx + gfy * gfy + gfz * gfz)
                 if (gflen > 1e-5f) {
-                    gfx /= gflen; gfy /= gflen; gfz /= gflen
+                    gfx /= gflen; gfy /= gflen; gfz /= gfz
                 } else {
                     gfx = a.fx; gfy = a.fy; gfz = a.fz
                 }
@@ -487,7 +443,7 @@ class ButterflySimulation(
                 a.fx = lerp(a.fx, gfx, gBlend)
                 a.fy = lerp(a.fy, gfy, gBlend)
                 a.fz = lerp(a.fz, gfz, gBlend)
-                val flen = hypot(a.fx, hypot(a.fy, a.fz)).let { if (it < 1e-5f) 1.0f else it }
+                val flen = sqrt(a.fx * a.fx + a.fy * a.fy + a.fz * a.fz).let { if (it < 1e-5f) 1.0f else it }
                 a.fx /= flen; a.fy /= flen; a.fz /= flen
 
                 val depthBank = a.vz * 0.85f
@@ -501,16 +457,33 @@ class ButterflySimulation(
                 a.ux = lerp(a.ux, upScratch[0], upBlend)
                 a.uy = lerp(a.uy, upScratch[1], upBlend)
                 a.uz = lerp(a.uz, upScratch[2], upBlend)
-                val ulen = hypot(a.ux, hypot(a.uy, a.uz)).let { if (it < 1e-5f) 1.0f else it }
+                val ulen = sqrt(a.ux * a.ux + a.uy * a.uy + a.uz * a.uz).let { if (it < 1e-5f) 1.0f else it }
                 a.ux /= ulen; a.uy /= ulen; a.uz /= ulen
             }
 
             a.px += a.vx * (dt * surge)
             a.py += a.vy * (dt * surge)
             a.pz += a.vz * (dt * surge)
-
-            writeInstance(i, a)
+            sortedIndices[i] = i
         }
+
+        // Insertion sort by Z depth (back-to-front: ascending pz from -4.4 to +1.2)
+        for (i in 1 until count) {
+            val idx = sortedIndices[i]
+            val z = agents[idx].pz
+            var j = i - 1
+            while (j >= 0 && agents[sortedIndices[j]].pz > z) {
+                sortedIndices[j + 1] = sortedIndices[j]
+                j--
+            }
+            sortedIndices[j + 1] = idx
+        }
+        for (i in 0 until count) {
+            writeInstance(i, agents[sortedIndices[i]])
+        }
+        instanceBuffer.position(0)
+        instanceBuffer.put(instanceArray, 0, count * INSTANCE_FLOATS)
+        instanceBuffer.position(0)
 
         // Step wingtip fairy-dust motes
         for (m in 0 until MAX_FAIRY_MOTES) {
@@ -599,7 +572,7 @@ class ButterflySimulation(
         var sx = -fx * fy
         var sy = 1.0f - fy * fy
         var sz = -fz * fy
-        val slen = hypot(sx, hypot(sy, sz))
+        val slen = sqrt(sx * sx + sy * sy + sz * sz)
         if (slen < 1e-4f) {
             sx = 0.0f; sy = 1.0f; sz = 0.0f
         } else {
@@ -611,7 +584,7 @@ class ButterflySimulation(
         var cx = -fx * dotCamFwd - sx * dotCamSky
         var cy = -fy * dotCamFwd - sy * dotCamSky
         var cz = 1.0f - fz * dotCamFwd - sz * dotCamSky
-        val clen = hypot(cx, hypot(cy, cz))
+        val clen = sqrt(cx * cx + cy * cy + cz * cz)
         if (clen < 1e-4f) {
             cx = 0.0f; cy = 0.0f; cz = 1.0f
         } else {
@@ -623,7 +596,7 @@ class ButterflySimulation(
         val ux = sx * c + cx * s
         val uy = sy * c + cy * s
         val uz = sz * c + cz * s
-        val ulen = hypot(ux, hypot(uy, uz))
+        val ulen = sqrt(ux * ux + uy * uy + uz * uz)
         if (ulen < 1e-4f) {
             out[0] = 0.0f; out[1] = 0.70f; out[2] = 0.71f
         } else {

@@ -10,7 +10,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-import kotlin.math.hypot
+import kotlin.math.sqrt
 
 class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
@@ -29,7 +29,9 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var butterflyProg = 0
     private var locViewProj = -1
     private var locTexArray = -1
-    private var locLightDir = -1
+    private var locSurfaceToLight = -1
+    private var locHalfVec = -1
+    private var locSssBase = -1
 
     private var moteProg = 0
     private var locMoteRes = -1
@@ -41,9 +43,23 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var moteVbo = 0
 
     private val viewProjMat = FloatArray(16)
-    private val lightDir = run {
-        val len = hypot(-0.35f, hypot(-0.80f, -0.48f))
-        floatArrayOf(-0.35f / len, -0.80f / len, -0.48f / len)
+    private val surfaceToLight = run {
+        val lx = 0.35f
+        val ly = 0.80f
+        val lz = 0.48f
+        val len = sqrt(lx * lx + ly * ly + lz * lz)
+        floatArrayOf(lx / len, ly / len, lz / len)
+    }
+    private val halfVec = run {
+        val hx = surfaceToLight[0]
+        val hy = surfaceToLight[1]
+        val hz = surfaceToLight[2] + 1.0f
+        val len = sqrt(hx * hx + hy * hy + hz * hz)
+        floatArrayOf(hx / len, hy / len, hz / len)
+    }
+    private val sssBase = run {
+        val backAlign = (-surfaceToLight[2]).coerceIn(0.0f, 1.0f)
+        backAlign * backAlign * 0.55f + 0.22f
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -52,7 +68,9 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
         butterflyProg = createProgram(BUTTERFLY_VS_SRC, BUTTERFLY_FS_SRC)
         locViewProj = GLES30.glGetUniformLocation(butterflyProg, "u_viewProj")
         locTexArray = GLES30.glGetUniformLocation(butterflyProg, "u_texArray")
-        locLightDir = GLES30.glGetUniformLocation(butterflyProg, "u_lightDir")
+        locSurfaceToLight = GLES30.glGetUniformLocation(butterflyProg, "u_surfaceToLight")
+        locHalfVec = GLES30.glGetUniformLocation(butterflyProg, "u_halfVec")
+        locSssBase = GLES30.glGetUniformLocation(butterflyProg, "u_sssBase")
 
         moteProg = createProgram(MOTE_VS_SRC, MOTE_FS_SRC)
         locMoteRes = GLES30.glGetUniformLocation(moteProg, "u_resolution")
@@ -68,12 +86,6 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        val frameStartNs = SystemClock.elapsedRealtimeNanos()
-        val elapsedNs = frameStartNs - lastFrameNs
-        if (elapsedNs in 1 until TARGET_FRAME_NS) {
-            val sleepNs = TARGET_FRAME_NS - elapsedNs
-            SystemClock.sleep(sleepNs / 1_000_000L)
-        }
         val nowNs = SystemClock.elapsedRealtimeNanos()
         val dt = ((nowNs - lastFrameNs) * 1e-9f).coerceIn(0.001f, 0.033f)
         lastFrameNs = nowNs
@@ -115,6 +127,14 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
             GLES30.glBindVertexArray(moteVao)
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, moteVbo)
+            val moteCapacityBytes =
+                ButterflySimulation.MAX_FAIRY_MOTES * 6 * ButterflySimulation.MOTE_FLOATS_PER_VERT * 4
+            GLES30.glBufferData(
+                GLES30.GL_ARRAY_BUFFER,
+                moteCapacityBytes,
+                null,
+                GLES30.GL_STREAM_DRAW
+            )
             GLES30.glBufferSubData(
                 GLES30.GL_ARRAY_BUFFER,
                 0,
@@ -129,7 +149,9 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
         GLES30.glUseProgram(butterflyProg)
         GLES30.glUniformMatrix4fv(locViewProj, 1, false, viewProjMat, 0)
         GLES30.glUniform1i(locTexArray, 0)
-        GLES30.glUniform3fv(locLightDir, 1, lightDir, 0)
+        GLES30.glUniform3fv(locSurfaceToLight, 1, surfaceToLight, 0)
+        GLES30.glUniform3fv(locHalfVec, 1, halfVec, 0)
+        GLES30.glUniform1f(locSssBase, sssBase)
 
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthFunc(GLES30.GL_LESS)
@@ -142,6 +164,14 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         GLES30.glBindVertexArray(butterflyVao)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, instanceVbo)
+        val instanceCapacityBytes =
+            ButterflySimulation.MAX_BUTTERFLIES * ButterflySimulation.INSTANCE_STRIDE_BYTES
+        GLES30.glBufferData(
+            GLES30.GL_ARRAY_BUFFER,
+            instanceCapacityBytes,
+            null,
+            GLES30.GL_STREAM_DRAW
+        )
         sim.instanceBuffer.position(0)
         GLES30.glBufferSubData(
             GLES30.GL_ARRAY_BUFFER,
@@ -400,8 +430,6 @@ class ButterflyRenderer(private val context: Context) : GLSurfaceView.Renderer {
     }
 
     companion object {
-        private const val TARGET_FRAME_NS = 16_666_667L // 60 FPS cap
-
         // 26-Vertex, 20-Triangle 4-Wing Articulated Butterfly Mesh (from mesh.hpp)
         private val BUTTERFLY_VERTS = floatArrayOf(
             // Left Forewing (side = -1.0)
@@ -544,75 +572,77 @@ void main() {
 """
 
         private const val BUTTERFLY_FS_SRC = """#version 300 es
-precision highp float;
-precision highp sampler2DArray;
+precision mediump float;
+precision mediump sampler2DArray;
 
-in vec2 v_uv;
-in vec3 v_normal;
+in highp vec2 v_uv;
+in mediump vec3 v_normal;
 flat in uint v_species;
 
 uniform sampler2DArray u_texArray;
-uniform vec3 u_lightDir;
+uniform mediump vec3 u_surfaceToLight;
+uniform mediump vec3 u_halfVec;
+uniform mediump float u_sssBase;
 
 out vec4 fragColor;
+
+const vec3 BIO_TINT[8] = vec3[8](
+    vec3(1.00, 0.50, 0.12),
+    vec3(0.10, 0.65, 1.00),
+    vec3(1.00, 0.80, 0.18),
+    vec3(0.78, 0.34, 0.96),
+    vec3(0.55, 0.92, 1.00),
+    vec3(0.88, 0.18, 0.68),
+    vec3(0.06, 0.88, 0.82),
+    vec3(0.72, 0.28, 0.96)
+);
+
+const vec3 IRID_HUE_A[8] = vec3[8](
+    vec3(1.00, 0.72, 0.20),
+    vec3(0.08, 0.72, 1.00),
+    vec3(1.00, 0.88, 0.30),
+    vec3(1.00, 0.58, 0.22),
+    vec3(0.48, 0.95, 1.00),
+    vec3(1.00, 0.28, 0.55),
+    vec3(0.08, 0.95, 0.78),
+    vec3(0.82, 0.36, 1.00)
+);
+
+const vec3 IRID_HUE_B[8] = vec3[8](
+    vec3(0.75, 0.22, 0.95),
+    vec3(0.58, 0.18, 1.00),
+    vec3(0.12, 0.88, 0.98),
+    vec3(0.72, 0.24, 1.00),
+    vec3(0.96, 0.62, 1.00),
+    vec3(0.52, 0.20, 1.00),
+    vec3(0.28, 0.35, 1.00),
+    vec3(1.00, 0.76, 0.24)
+);
+
+const float IRID_STRENGTH[8] = float[8](
+    0.34, 0.72, 0.38, 0.52, 0.46, 0.56, 0.64, 0.54
+);
 
 void main() {
     vec4 tex = texture(u_texArray, vec3(v_uv, float(v_species)));
     if (tex.a < 0.08) discard;
 
     vec3 dorsalN = normalize(v_normal);
-    const vec3 V = vec3(0.0, 0.0, 1.0);
-    vec3 L = normalize(-u_lightDir);
+    vec3 L = u_surfaceToLight;
 
-    float facing = dot(dorsalN, V);
+    float facing = dorsalN.z;
     float dorsalFactor = smoothstep(-0.18, 0.18, facing);
-    vec3 N = normalize(dorsalN * (facing >= 0.0 ? 1.0 : -1.0));
+    vec3 N = dorsalN * (facing >= 0.0 ? 1.0 : -1.0);
 
     float texLuma = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
     vec3 ventralAlbedo = mix(vec3(texLuma) * vec3(0.84, 0.78, 0.70), tex.rgb * 0.76, 0.60);
     vec3 baseAlbedo = mix(ventralAlbedo, tex.rgb, dorsalFactor);
 
-    vec3 bioTint  = vec3(1.00, 0.50, 0.12);
-    vec3 iridHueA = vec3(1.00, 0.72, 0.20);
-    vec3 iridHueB = vec3(0.75, 0.22, 0.95);
-    float iridStrength = 0.34;
-
-    if (v_species == 1u) {
-        bioTint  = vec3(0.10, 0.65, 1.00);
-        iridHueA = vec3(0.08, 0.72, 1.00);
-        iridHueB = vec3(0.58, 0.18, 1.00);
-        iridStrength = 0.72;
-    } else if (v_species == 2u) {
-        bioTint  = vec3(1.00, 0.80, 0.18);
-        iridHueA = vec3(1.00, 0.88, 0.30);
-        iridHueB = vec3(0.12, 0.88, 0.98);
-        iridStrength = 0.38;
-    } else if (v_species == 3u) {
-        bioTint  = vec3(0.78, 0.34, 0.96);
-        iridHueA = vec3(1.00, 0.58, 0.22);
-        iridHueB = vec3(0.72, 0.24, 1.00);
-        iridStrength = 0.52;
-    } else if (v_species == 4u) {
-        bioTint  = vec3(0.55, 0.92, 1.00);
-        iridHueA = vec3(0.48, 0.95, 1.00);
-        iridHueB = vec3(0.96, 0.62, 1.00);
-        iridStrength = 0.46;
-    } else if (v_species == 5u) {
-        bioTint  = vec3(0.88, 0.18, 0.68);
-        iridHueA = vec3(1.00, 0.28, 0.55);
-        iridHueB = vec3(0.52, 0.20, 1.00);
-        iridStrength = 0.56;
-    } else if (v_species == 6u) {
-        bioTint  = vec3(0.06, 0.88, 0.82);
-        iridHueA = vec3(0.08, 0.95, 0.78);
-        iridHueB = vec3(0.28, 0.35, 1.00);
-        iridStrength = 0.64;
-    } else if (v_species == 7u) {
-        bioTint  = vec3(0.72, 0.28, 0.96);
-        iridHueA = vec3(0.82, 0.36, 1.00);
-        iridHueB = vec3(1.00, 0.76, 0.24);
-        iridStrength = 0.54;
-    }
+    uint sp = v_species & 7u;
+    vec3 bioTint  = BIO_TINT[sp];
+    vec3 iridHueA = IRID_HUE_A[sp];
+    vec3 iridHueB = IRID_HUE_B[sp];
+    float iridStrength = IRID_STRENGTH[sp];
 
     float luma = dot(baseAlbedo, vec3(0.299, 0.587, 0.114));
     float darkPigment = 1.0 - smoothstep(0.05, 0.42, luma);
@@ -625,30 +655,35 @@ void main() {
     float newLuma = dot(baseAlbedo, vec3(0.299, 0.587, 0.114));
     baseAlbedo = clamp(mix(vec3(newLuma), baseAlbedo, mix(1.12, 1.42, dorsalFactor)), 0.0, 1.0);
 
-    float ndotl = max(dot(N, L), 0.0) + 0.58 * max(dot(-N, L), 0.0);
+    float nDotL = dot(N, L);
+    float posNdotL = max(nDotL, 0.0);
+    float wrapBack = max(-nDotL, 0.0);
+    float ndotl = posNdotL + 0.58 * wrapBack;
     float hemi  = 0.56 + 0.16 * dorsalN.y;
     vec3 diffuse = baseAlbedo * (hemi + 0.78 * ndotl);
 
-    float backAlign = clamp(dot(V, -L), 0.0, 1.0);
-    float wrapBack  = clamp(dot(-N, L), 0.0, 1.0);
-    float sssFactor = pow(backAlign, 2.0) * 0.55 + wrapBack * 0.45 + 0.22;
+    float sssFactor = u_sssBase + wrapBack * 0.45;
     float membrane  = smoothstep(0.06, 0.55, newLuma);
     vec3 sss = mix(baseAlbedo, bioTint, 0.35) * sssFactor * (0.28 + 0.65 * membrane);
 
     float dorsalShimmer = mix(0.24, 1.00, dorsalFactor);
-    float ndotv = clamp(abs(dot(N, V)), 0.0, 1.0);
-    float fresnel = pow(1.0 - ndotv, 1.75);
+    float oneMinusNdotV = 1.0 - clamp(abs(N.z), 0.0, 1.0);
+    float fresnel = oneMinusNdotV * sqrt(oneMinusNdotV);
     float edgeGlow = smoothstep(0.28, 0.88, wingSpan);
     vec3 iridTint = mix(iridHueA, iridHueB, clamp(fresnel * 0.75 + edgeGlow * 0.35, 0.0, 1.0));
     vec3 iridescence = iridTint * (iridStrength * dorsalShimmer) * (0.45 + 0.55 * ndotl) * (0.28 + 0.72 * max(fresnel, edgeGlow * 0.65));
 
-    vec2 scaleGrid = v_uv * 115.0 + dorsalN.xy * 9.5;
-    float sparkleWave = sin(scaleGrid.x) * sin(scaleGrid.y) * cos((scaleGrid.x - scaleGrid.y) * 0.7);
-    float sparkle = pow(clamp(sparkleWave, 0.0, 1.0), 5.0) * (0.35 + 0.65 * edgeGlow);
+    highp vec2 scaleGrid = v_uv * 115.0 + dorsalN.xy * 9.5;
+    float sw = clamp(sin(scaleGrid.x) * sin(scaleGrid.y) * cos((scaleGrid.x - scaleGrid.y) * 0.7), 0.0, 1.0);
+    float sw2 = sw * sw;
+    float sparkle = (sw2 * sw2 * sw) * (0.35 + 0.65 * edgeGlow);
     vec3 scaleShimmer = mix(iridHueA, vec3(1.0, 0.97, 0.88), 0.55) * sparkle * (0.58 * dorsalShimmer);
 
-    vec3 H = normalize(L + V);
-    float spec = pow(max(dot(N, H), 0.0), 16.0) * 0.25;
+    float nh = max(dot(N, u_halfVec), 0.0);
+    float nh2 = nh * nh;
+    float nh4 = nh2 * nh2;
+    float nh8 = nh4 * nh4;
+    float spec = (nh8 * nh8) * 0.25;
 
     vec3 color = diffuse + sss + iridescence + scaleShimmer + vec3(spec);
     color = color / (vec3(1.0) + color * 0.16);

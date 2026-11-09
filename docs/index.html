@@ -159,30 +159,68 @@ void main() {
 `;
 
 const BUTTERFLY_FS_SRC = `#version 300 es
-precision highp float;
-precision highp sampler2DArray;
+precision mediump float;
+precision mediump sampler2DArray;
 
-in vec2 v_uv;
+in highp vec2 v_uv;
 in vec3 v_normal;
 flat in uint v_species;
 
 uniform sampler2DArray u_texArray;
-uniform vec3 u_lightDir;
+uniform vec3 u_surfaceToLight;
+uniform vec3 u_halfVec;
+uniform float u_sssBase;
 
 out vec4 fragColor;
+
+const vec3 BIO_TINT[8] = vec3[8](
+    vec3(1.00, 0.50, 0.12), // 0: Monarch (solar gold-amber)
+    vec3(0.10, 0.65, 1.00), // 1: Blue Morpho (celestial azure -> violet)
+    vec3(1.00, 0.80, 0.18), // 2: Tiger Swallowtail (sun-gold -> turquoise)
+    vec3(0.78, 0.34, 0.96), // 3: Question Mark (enchanted amber-violet)
+    vec3(0.55, 0.92, 1.00), // 4: Cabbage White (moonlit cyan-opal -> rose pearl)
+    vec3(0.88, 0.18, 0.68), // 5: Red Admiral (ruby-magenta -> royal violet)
+    vec3(0.06, 0.88, 0.82), // 6: Pipevine Swallowtail (emerald-teal -> sapphire)
+    vec3(0.72, 0.28, 0.96)  // 7: Buckeye (amethyst-violet -> warm gold)
+);
+
+const vec3 IRID_HUE_A[8] = vec3[8](
+    vec3(1.00, 0.72, 0.20),
+    vec3(0.08, 0.72, 1.00),
+    vec3(1.00, 0.88, 0.30),
+    vec3(1.00, 0.58, 0.22),
+    vec3(0.48, 0.95, 1.00),
+    vec3(1.00, 0.28, 0.55),
+    vec3(0.08, 0.95, 0.78),
+    vec3(0.82, 0.36, 1.00)
+);
+
+const vec3 IRID_HUE_B[8] = vec3[8](
+    vec3(0.75, 0.22, 0.95),
+    vec3(0.58, 0.18, 1.00),
+    vec3(0.12, 0.88, 0.98),
+    vec3(0.72, 0.24, 1.00),
+    vec3(0.96, 0.62, 1.00),
+    vec3(0.52, 0.20, 1.00),
+    vec3(0.28, 0.35, 1.00),
+    vec3(1.00, 0.76, 0.24)
+);
+
+const float IRID_STRENGTH[8] = float[8](
+    0.34, 0.72, 0.38, 0.52, 0.46, 0.56, 0.64, 0.54
+);
 
 void main() {
     vec4 tex = texture(u_texArray, vec3(v_uv, float(v_species)));
     if (tex.a < 0.08) discard;
 
     vec3 dorsalN = normalize(v_normal);
-    const vec3 V = vec3(0.0, 0.0, 1.0);
-    vec3 L = normalize(-u_lightDir);
+    vec3 L = u_surfaceToLight;
 
     // Smooth dorsal/ventral blend across grazing angles so curved wings never snap at gl_FrontFacing
-    float facing = dot(dorsalN, V);
+    float facing = dorsalN.z;
     float dorsalFactor = smoothstep(-0.18, 0.18, facing);
-    vec3 N = normalize(dorsalN * (facing >= 0.0 ? 1.0 : -1.0));
+    vec3 N = facing >= 0.0 ? dorsalN : -dorsalN;
 
     // Ventral (underside) is warmer, slightly softer, and more matte than the dorsal topside
     // so snapping the wings open creates a vivid "Morpho jewel flash" on every downstroke hold
@@ -190,48 +228,11 @@ void main() {
     vec3 ventralAlbedo = mix(vec3(texLuma) * vec3(0.84, 0.78, 0.70), tex.rgb * 0.76, 0.60);
     vec3 baseAlbedo = mix(ventralAlbedo, tex.rgb, dorsalFactor);
 
-    // Per-species bioluminescent accent & iridescent shimmer palette
-    vec3 bioTint  = vec3(1.00, 0.50, 0.12); // 0: Monarch (solar gold-amber)
-    vec3 iridHueA = vec3(1.00, 0.72, 0.20);
-    vec3 iridHueB = vec3(0.75, 0.22, 0.95);
-    float iridStrength = 0.34;
-
-    if (v_species == 1u) {        // 1: Blue Morpho (celestial azure -> violet)
-        bioTint  = vec3(0.10, 0.65, 1.00);
-        iridHueA = vec3(0.08, 0.72, 1.00);
-        iridHueB = vec3(0.58, 0.18, 1.00);
-        iridStrength = 0.72;
-    } else if (v_species == 2u) { // 2: Tiger Swallowtail (sun-gold -> turquoise)
-        bioTint  = vec3(1.00, 0.80, 0.18);
-        iridHueA = vec3(1.00, 0.88, 0.30);
-        iridHueB = vec3(0.12, 0.88, 0.98);
-        iridStrength = 0.38;
-    } else if (v_species == 3u) { // 3: Question Mark (enchanted amber-violet)
-        bioTint  = vec3(0.78, 0.34, 0.96);
-        iridHueA = vec3(1.00, 0.58, 0.22);
-        iridHueB = vec3(0.72, 0.24, 1.00);
-        iridStrength = 0.52;
-    } else if (v_species == 4u) { // 4: Cabbage White (moonlit cyan-opal -> rose pearl)
-        bioTint  = vec3(0.55, 0.92, 1.00);
-        iridHueA = vec3(0.48, 0.95, 1.00);
-        iridHueB = vec3(0.96, 0.62, 1.00);
-        iridStrength = 0.46;
-    } else if (v_species == 5u) { // 5: Red Admiral (ruby-magenta -> royal violet)
-        bioTint  = vec3(0.88, 0.18, 0.68);
-        iridHueA = vec3(1.00, 0.28, 0.55);
-        iridHueB = vec3(0.52, 0.20, 1.00);
-        iridStrength = 0.56;
-    } else if (v_species == 6u) { // 6: Pipevine Swallowtail (emerald-teal -> sapphire)
-        bioTint  = vec3(0.06, 0.88, 0.82);
-        iridHueA = vec3(0.08, 0.95, 0.78);
-        iridHueB = vec3(0.28, 0.35, 1.00);
-        iridStrength = 0.64;
-    } else if (v_species == 7u) { // 7: Buckeye (amethyst-violet -> warm gold)
-        bioTint  = vec3(0.72, 0.28, 0.96);
-        iridHueA = vec3(0.82, 0.36, 1.00);
-        iridHueB = vec3(1.00, 0.76, 0.24);
-        iridStrength = 0.54;
-    }
+    uint sp = min(v_species, 7u);
+    vec3 bioTint = BIO_TINT[sp];
+    vec3 iridHueA = IRID_HUE_A[sp];
+    vec3 iridHueB = IRID_HUE_B[sp];
+    float iridStrength = IRID_STRENGTH[sp];
 
     float luma = dot(baseAlbedo, vec3(0.299, 0.587, 0.114));
     float darkPigment = 1.0 - smoothstep(0.05, 0.42, luma);
@@ -247,34 +248,39 @@ void main() {
     baseAlbedo = clamp(mix(vec3(newLuma), baseAlbedo, mix(1.12, 1.42, dorsalFactor)), 0.0, 1.0);
 
     // 1. Stained-glass two-sided lighting
-    float ndotl = max(dot(N, L), 0.0) + 0.58 * max(dot(-N, L), 0.0);
+    float nDotL = dot(N, L);
+    float wrapBack = clamp(-nDotL, 0.0, 1.0);
+    float ndotl = max(nDotL, 0.0) + 0.58 * wrapBack;
     float hemi  = 0.56 + 0.16 * dorsalN.y;
     vec3 diffuse = baseAlbedo * (hemi + 0.78 * ndotl);
 
     // 2. Bioluminescent Subsurface Scattering
-    float backAlign = clamp(dot(V, -L), 0.0, 1.0);
-    float wrapBack  = clamp(dot(-N, L), 0.0, 1.0);
-    float sssFactor = pow(backAlign, 2.0) * 0.55 + wrapBack * 0.45 + 0.22;
+    float sssFactor = u_sssBase + wrapBack * 0.45;
     float membrane  = smoothstep(0.06, 0.55, newLuma);
     vec3 sss = mix(baseAlbedo, bioTint, 0.35) * sssFactor * (0.28 + 0.65 * membrane);
 
     // 3. All-Species Structural Iridescence + Wingtip Rim Luminescence
     float dorsalShimmer = mix(0.24, 1.00, dorsalFactor);
-    float ndotv = clamp(abs(dot(N, V)), 0.0, 1.0);
-    float fresnel = pow(1.0 - ndotv, 1.75);
+    float ndotv = clamp(abs(N.z), 0.0, 1.0);
+    float oneMinusNdotV = 1.0 - ndotv;
+    float fresnel = oneMinusNdotV * sqrt(oneMinusNdotV);
     float edgeGlow = smoothstep(0.28, 0.88, wingSpan);
     vec3 iridTint = mix(iridHueA, iridHueB, clamp(fresnel * 0.75 + edgeGlow * 0.35, 0.0, 1.0));
     vec3 iridescence = iridTint * (iridStrength * dorsalShimmer) * (0.45 + 0.55 * ndotl) * (0.28 + 0.72 * max(fresnel, edgeGlow * 0.65));
 
     // 4. Microscopic Wing-Scale Shimmer
-    vec2 scaleGrid = v_uv * 115.0 + dorsalN.xy * 9.5;
-    float sparkleWave = sin(scaleGrid.x) * sin(scaleGrid.y) * cos((scaleGrid.x - scaleGrid.y) * 0.7);
-    float sparkle = pow(clamp(sparkleWave, 0.0, 1.0), 5.0) * (0.35 + 0.65 * edgeGlow);
+    highp vec2 scaleGrid = v_uv * 115.0 + dorsalN.xy * 9.5;
+    float sparkleWave = clamp(sin(scaleGrid.x) * sin(scaleGrid.y) * cos((scaleGrid.x - scaleGrid.y) * 0.7), 0.0, 1.0);
+    float sw2 = sparkleWave * sparkleWave;
+    float sparkle = sw2 * sw2 * sparkleWave * (0.35 + 0.65 * edgeGlow);
     vec3 scaleShimmer = mix(iridHueA, vec3(1.0, 0.97, 0.88), 0.55) * sparkle * (0.58 * dorsalShimmer);
 
     // 5. Subtle specular highlight on dark chitin body and wing ribs
-    vec3 H = normalize(L + V);
-    float spec = pow(max(dot(N, H), 0.0), 16.0) * 0.25;
+    float specBase = max(dot(N, u_halfVec), 0.0);
+    float spec2 = specBase * specBase;
+    float spec4 = spec2 * spec2;
+    float spec8 = spec4 * spec4;
+    float spec = spec8 * spec8 * 0.25;
 
     vec3 color = diffuse + sss + iridescence + scaleShimmer + vec3(spec);
     color = color / (vec3(1.0) + color * 0.16);
@@ -377,16 +383,6 @@ const PHI = 1.61803398875;
 const STATE_FLAPPING = 0;
 const STATE_GLIDING = 1;
 
-const GRID_X = 16;
-const GRID_Y = 12;
-const GRID_Z = 16;
-const NUM_CELLS = GRID_X * GRID_Y * GRID_Z;
-const CELL_SIZE = 0.65;
-const INV_CELL_SIZE = 1.0 / CELL_SIZE;
-const GRID_MIN_X = -5.2;
-const GRID_MIN_Y = -3.9;
-const GRID_MIN_Z = -7.2;
-
 const SPECIES_SCALE = [0.320, 0.350, 0.340, 0.250, 0.230, 0.260, 0.310, 0.250];
 const SPECIES_FLAP_HZ = [2.5, 2.2, 2.4, 3.6, 4.0, 3.7, 2.7, 3.8];
 const SPECIES_GLIDE_RAD = [0.82, 0.78, 0.84, 0.98, 1.04, 0.96, 0.86, 1.00];
@@ -436,7 +432,7 @@ function computeRolledUp(fx, fy, fz, rollToCamRad, out) {
   let sx = -fx * fy;
   let sy = 1.0 - fy * fy;
   let sz = -fz * fy;
-  let slen = Math.hypot(sx, sy, sz);
+  let slen = Math.sqrt(sx * sx + sy * sy + sz * sz);
   if (slen < 1e-4) {
     sx = 0.0; sy = 1.0; sz = 0.0;
   } else {
@@ -449,7 +445,7 @@ function computeRolledUp(fx, fy, fz, rollToCamRad, out) {
   let cx = -fx * dotCamFwd - sx * dotCamSky;
   let cy = -fy * dotCamFwd - sy * dotCamSky;
   let cz = 1.0 - fz * dotCamFwd - sz * dotCamSky;
-  let clen = Math.hypot(cx, cy, cz);
+  let clen = Math.sqrt(cx * cx + cy * cy + cz * cz);
   if (clen < 1e-4) {
     cx = 0.0; cy = 0.0; cz = 1.0;
   } else {
@@ -461,7 +457,7 @@ function computeRolledUp(fx, fy, fz, rollToCamRad, out) {
   let ux = sx * c + cx * s;
   let uy = sy * c + cy * s;
   let uz = sz * c + cz * s;
-  let ulen = Math.hypot(ux, uy, uz);
+  let ulen = Math.sqrt(ux * ux + uy * uy + uz * uz);
   if (ulen < 1e-4) {
     out[0] = 0.0; out[1] = 0.70; out[2] = 0.71;
   } else {
@@ -484,8 +480,7 @@ class ButterflySimulation {
     this.count = clamp(count, 10, 400);
     this.simTime = 0.0;
     this.agents = [];
-    this.cellHead = new Int32Array(NUM_CELLS);
-    this.nextAgent = new Int32Array(this.count);
+    this.sortedIndices = new Int32Array(this.count);
 
     // 52-byte interleaved instance buffer (13 x 4-byte words per butterfly)
     this.instanceBuffer = new ArrayBuffer(this.count * 52);
@@ -503,7 +498,7 @@ class ButterflySimulation {
       let dx = Math.cos(headingAng);
       let dy = rng.range(-0.35, 0.35);
       let dz = Math.sin(headingAng) * 0.35;
-      const dlen = Math.hypot(dx, dy, dz) || 1.0;
+      const dlen = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1.0;
       dx /= dlen; dy /= dlen; dz /= dlen;
 
       const spd = rng.range(0.32, 0.58);
@@ -535,6 +530,7 @@ class ButterflySimulation {
         rng
       };
       this.agents.push(agent);
+      this.sortedIndices[i] = i;
       this.writeInstance(i, agent);
     }
 
@@ -575,7 +571,7 @@ class ButterflySimulation {
     let rx = b.fy * b.uz - b.fz * b.uy;
     let ry = b.fz * b.ux - b.fx * b.uz;
     let rz = b.fx * b.uy - b.fy * b.ux;
-    const rlen = Math.hypot(rx, ry, rz) || 1.0;
+    const rlen = Math.sqrt(rx * rx + ry * ry + rz * rz) || 1.0;
     rx /= rlen; ry /= rlen; rz /= rlen;
 
     const side = (mIdx & 1) ? 0.70 : -0.70;
@@ -604,22 +600,8 @@ class ButterflySimulation {
     this.simTime += dt;
     if (this.simTime > 86400.0) this.simTime -= 86400.0;
 
-    // 1. Rebuild flat O(N) spatial hash grid
-    this.cellHead.fill(-1);
-    for (let i = 0; i < this.count; ++i) {
-      const a = this.agents[i];
-      const cx = clamp(((a.px - GRID_MIN_X) * INV_CELL_SIZE) | 0, 0, GRID_X - 1);
-      const cy = clamp(((a.py - GRID_MIN_Y) * INV_CELL_SIZE) | 0, 0, GRID_Y - 1);
-      const cz = clamp(((a.pz - GRID_MIN_Z) * INV_CELL_SIZE) | 0, 0, GRID_Z - 1);
-      const cellIdx = (cz * GRID_Y + cy) * GRID_X + cx;
-      this.nextAgent[i] = this.cellHead[cellIdx];
-      this.cellHead[cellIdx] = i;
-    }
-
     const turb = [0, 0, 0];
     const targetUp = [0, 1, 0];
-    const sepRadius = 0.62;
-    const sepRadiusSq = sepRadius * sepRadius;
 
     // Adapt horizontal bounds smoothly to screen aspect ratio (e.g. 16:9, 16:10, or 3:2 Chromebooks)
     const boundMaxX = Math.max(1.4, orthoHalfW - 0.20);
@@ -630,43 +612,6 @@ class ButterflySimulation {
 
     for (let i = 0; i < this.count; ++i) {
       const a = this.agents[i];
-
-      const cx = clamp(((a.px - GRID_MIN_X) * INV_CELL_SIZE) | 0, 0, GRID_X - 1);
-      const cy = clamp(((a.py - GRID_MIN_Y) * INV_CELL_SIZE) | 0, 0, GRID_Y - 1);
-      const cz = clamp(((a.pz - GRID_MIN_Z) * INV_CELL_SIZE) | 0, 0, GRID_Z - 1);
-
-      let sepX = 0.0, sepY = 0.0, sepZ = 0.0;
-      const zMin = Math.max(0, cz - 1), zMax = Math.min(GRID_Z - 1, cz + 1);
-      const yMin = Math.max(0, cy - 1), yMax = Math.min(GRID_Y - 1, cy + 1);
-      const xMin = Math.max(0, cx - 1), xMax = Math.min(GRID_X - 1, cx + 1);
-
-      let neighborsChecked = 0;
-      for (let nz = zMin; nz <= zMax; ++nz) {
-        for (let ny = yMin; ny <= yMax; ++ny) {
-          for (let nx = xMin; nx <= xMax; ++nx) {
-            let j = this.cellHead[(nz * GRID_Y + ny) * GRID_X + nx];
-            while (j !== -1 && neighborsChecked < 16) {
-              if (j !== i) {
-                const b = this.agents[j];
-                const dx = a.px - b.px;
-                const dy = a.py - b.py;
-                const dz = a.pz - b.pz;
-                const d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > 1e-6 && d2 < sepRadiusSq) {
-                  const invD = 1.0 / Math.sqrt(d2);
-                  const push = (sepRadius - (1.0 / invD)) / sepRadius;
-                  const w = invD * push;
-                  sepX += dx * w;
-                  sepY += dy * w;
-                  sepZ += dz * w;
-                }
-                ++neighborsChecked;
-              }
-              j = this.nextAgent[j];
-            }
-          }
-        }
-      }
 
       // Soft boundary return force keeping butterflies inside full screen
       let boundX = 0.0, boundY = 0.0, boundZ = 0.0;
@@ -691,14 +636,13 @@ class ButterflySimulation {
       const soaringSpecies = (a.species_id === 0 || a.species_id === 1 || a.species_id === 2 || a.species_id === 6);
       const turbMul = soaringSpecies ? 0.72 : 1.05;
 
-      let accelX = sepX * 1.15 + meadowX + boundX + turb[0] * turbMul;
-      let accelY = sepY * 1.15 + meadowY + boundY + turb[1] * turbMul;
-      let accelZ = sepZ * 1.15 + meadowZ + boundZ + turb[2] * turbMul;
+      let accelX = meadowX + boundX + turb[0] * turbMul;
+      let accelY = meadowY + boundY + turb[1] * turbMul;
+      let accelZ = meadowZ + boundZ + turb[2] * turbMul;
 
       const boundLenSq = boundX * boundX + boundY * boundY + boundZ * boundZ;
-      const sepLenSq = sepX * sepX + sepY * sepY + sepZ * sepZ;
 
-      if (a.state === STATE_GLIDING && (boundLenSq > 0.01 || sepLenSq > 0.06)) {
+      if (a.state === STATE_GLIDING && boundLenSq > 0.01) {
         a.state = STATE_FLAPPING;
         a.phase = 2.38;
         a.state_timer = a.rng.range(0.90, 1.60);
@@ -717,7 +661,7 @@ class ButterflySimulation {
           if (a.rng.next01() < glideProb) {
             a.state = STATE_GLIDING;
             a.state_timer = soaringSpecies ? a.rng.range(1.60, 3.30) : a.rng.range(0.55, 1.20);
-            const horizSpd = Math.hypot(a.vx, a.vz);
+            const horizSpd = Math.sqrt(a.vx * a.vx + a.vz * a.vz);
             const targetHoriz = clamp(horizSpd, 0.24, soaringSpecies ? 0.44 : 0.52);
             const hx = horizSpd > 1e-4 ? (a.vx / horizSpd) : (a.fx >= 0.0 ? 1.0 : -1.0);
             const hz = horizSpd > 1e-4 ? (a.vz / horizSpd) : 0.0;
@@ -758,7 +702,7 @@ class ButterflySimulation {
         a.vz += accelZ * dt;
         a.vy = clamp(a.vy, soaringSpecies ? -0.14 : -0.24, 0.64);
 
-        const spd = Math.hypot(a.vx, a.vy, a.vz);
+        const spd = Math.sqrt(a.vx * a.vx + a.vy * a.vy + a.vz * a.vz);
         const minSpd = soaringSpecies ? 0.28 : 0.36;
         const maxSpd = soaringSpecies ? 0.58 : 0.68;
         if (spd > 1e-5) {
@@ -773,7 +717,7 @@ class ButterflySimulation {
 
         // Align forward heading
         let dfx = a.vx, dfy = a.vy * 0.85, dfz = a.vz * 0.45;
-        let dflen = Math.hypot(dfx, dfy, dfz);
+        let dflen = Math.sqrt(dfx * dfx + dfy * dfy + dfz * dfz);
         if (dflen > 1e-5) {
           dfx /= dflen; dfy /= dflen; dfz /= dflen;
         } else {
@@ -783,7 +727,7 @@ class ButterflySimulation {
         a.fx = lerp(a.fx, dfx, fBlend);
         a.fy = lerp(a.fy, dfy, fBlend);
         a.fz = lerp(a.fz, dfz, fBlend);
-        const flen = Math.hypot(a.fx, a.fy, a.fz) || 1.0;
+        const flen = Math.sqrt(a.fx * a.fx + a.fy * a.fy + a.fz * a.fz) || 1.0;
         a.fx /= flen; a.fy /= flen; a.fz /= flen;
 
         // 3D roll around forward axis
@@ -797,7 +741,7 @@ class ButterflySimulation {
         a.ux = lerp(a.ux, targetUp[0], upBlend);
         a.uy = lerp(a.uy, targetUp[1], upBlend);
         a.uz = lerp(a.uz, targetUp[2], upBlend);
-        const ulen = Math.hypot(a.ux, a.uy, a.uz) || 1.0;
+        const ulen = Math.sqrt(a.ux * a.ux + a.uy * a.uy + a.uz * a.uz) || 1.0;
         a.ux /= ulen; a.uy /= ulen; a.uz /= ulen;
       } else {
         const damp = Math.min(1.0, dt * 8.0);
@@ -809,7 +753,7 @@ class ButterflySimulation {
         if (a.vy > -0.14) {
           a.vy = soaringSpecies ? -0.17 : -0.20;
         }
-        const spd = Math.hypot(a.vx, a.vy, a.vz);
+        const spd = Math.sqrt(a.vx * a.vx + a.vy * a.vy + a.vz * a.vz);
         const minGlide = soaringSpecies ? 0.26 : 0.32;
         const maxGlide = soaringSpecies ? 0.50 : 0.58;
         const glideSpd = clamp(spd * (1.0 - 0.12 * dt), minGlide, maxGlide);
@@ -819,7 +763,7 @@ class ButterflySimulation {
         }
 
         let gfx = a.vx, gfy = a.vy * 0.85, gfz = a.vz * 0.45;
-        let gflen = Math.hypot(gfx, gfy, gfz);
+        let gflen = Math.sqrt(gfx * gfx + gfy * gfy + gfz * gfz);
         if (gflen > 1e-5) {
           gfx /= gflen; gfy /= gflen; gfz /= gflen;
         } else {
@@ -829,7 +773,7 @@ class ButterflySimulation {
         a.fx = lerp(a.fx, gfx, gBlend);
         a.fy = lerp(a.fy, gfy, gBlend);
         a.fz = lerp(a.fz, gfz, gBlend);
-        const flen = Math.hypot(a.fx, a.fy, a.fz) || 1.0;
+        const flen = Math.sqrt(a.fx * a.fx + a.fy * a.fy + a.fz * a.fz) || 1.0;
         a.fx /= flen; a.fy /= flen; a.fz /= flen;
 
         const depthBank = a.vz * 0.85;
@@ -843,15 +787,30 @@ class ButterflySimulation {
         a.ux = lerp(a.ux, targetUp[0], upBlend);
         a.uy = lerp(a.uy, targetUp[1], upBlend);
         a.uz = lerp(a.uz, targetUp[2], upBlend);
-        const ulen = Math.hypot(a.ux, a.uy, a.uz) || 1.0;
+        const ulen = Math.sqrt(a.ux * a.ux + a.uy * a.uy + a.uz * a.uz) || 1.0;
         a.ux /= ulen; a.uy /= ulen; a.uz /= ulen;
       }
 
       a.px += a.vx * (dt * surge);
       a.py += a.vy * (dt * surge);
       a.pz += a.vz * (dt * surge);
+    }
 
-      this.writeInstance(i, a);
+    // Sort butterflies back-to-front (ascending pz) via insertion sort
+    const idx = this.sortedIndices;
+    for (let i = 1; i < this.count; ++i) {
+      const cur = idx[i];
+      const curZ = this.agents[cur].pz;
+      let j = i - 1;
+      while (j >= 0 && this.agents[idx[j]].pz > curZ) {
+        idx[j + 1] = idx[j];
+        --j;
+      }
+      idx[j + 1] = cur;
+    }
+
+    for (let i = 0; i < this.count; ++i) {
+      this.writeInstance(i, this.agents[idx[i]]);
     }
 
     // Step wingtip fairy-dust motes
@@ -996,16 +955,15 @@ async function createSpeciesTextureArray(gl) {
 
 // Compute column-major orthographic view-projection matrix matching main.cpp:
 // camPos = (0, 0, 8.6) looking at (0, 0, -1), Ortho(-orthoHalfW, orthoHalfW, -orthoHalfH, orthoHalfH, 0.5, 35.0)
-function computeOrthoViewProj(orthoHalfW, orthoHalfH) {
+function computeOrthoViewProj(orthoHalfW, orthoHalfH, out) {
   const near = 0.5;
   const far = 35.0;
   const camZ = 8.6;
-  return new Float32Array([
-    1.0 / orthoHalfW, 0.0, 0.0, 0.0,
-    0.0, 1.0 / orthoHalfH, 0.0, 0.0,
-    0.0, 0.0, -2.0 / (far - near), 0.0,
-    0.0, 0.0, -(far + near - 2.0 * camZ) / (far - near), 1.0
-  ]);
+  out[0] = 1.0 / orthoHalfW;
+  out[5] = 1.0 / orthoHalfH;
+  out[10] = -2.0 / (far - near);
+  out[14] = -(far + near - 2.0 * camZ) / (far - near);
+  out[15] = 1.0;
 }
 
 async function main() {
@@ -1029,7 +987,9 @@ async function main() {
   const butterflyProg = createProgram(gl, BUTTERFLY_VS_SRC, BUTTERFLY_FS_SRC);
   const locViewProj = gl.getUniformLocation(butterflyProg, "u_viewProj");
   const locTexArray = gl.getUniformLocation(butterflyProg, "u_texArray");
-  const locLightDir = gl.getUniformLocation(butterflyProg, "u_lightDir");
+  const locSurfaceToLight = gl.getUniformLocation(butterflyProg, "u_surfaceToLight");
+  const locHalfVec = gl.getUniformLocation(butterflyProg, "u_halfVec");
+  const locSssBase = gl.getUniformLocation(butterflyProg, "u_sssBase");
 
   const moteProg = createProgram(gl, MOTE_VS_SRC, MOTE_FS_SRC);
   const locMoteRes = gl.getUniformLocation(moteProg, "u_resolution");
@@ -1115,25 +1075,37 @@ async function main() {
   gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 28, 16);
   gl.bindVertexArray(null);
 
-  // Normalized key light direction (-0.35, -0.80, -0.48)
-  const lLen = Math.hypot(-0.35, -0.80, -0.48);
-  const lightDir = new Float32Array([-0.35 / lLen, -0.80 / lLen, -0.48 / lLen]);
+  // Precompute constant lighting vectors from key light direction (-0.35, -0.80, -0.48)
+  const lLen = Math.sqrt(0.35 * 0.35 + 0.80 * 0.80 + 0.48 * 0.48);
+  const lx = -0.35 / lLen, ly = -0.80 / lLen, lz = -0.48 / lLen;
+  const surfaceToLight = new Float32Array([-lx, -ly, -lz]);
+  const hx = -lx, hy = -ly, hz = -lz + 1.0;
+  const hLen = Math.sqrt(hx * hx + hy * hy + hz * hz);
+  const halfVec = new Float32Array([hx / hLen, hy / hLen, hz / hLen]);
+  const sssBase = Math.min(Math.max(lz, 0.0), 1.0) * 0.40 + 0.60;
+
+  const viewProjMat = new Float32Array(16);
 
   let lastTime = performance.now();
 
   function frame(now) {
+    requestAnimationFrame(frame);
+    if (document.hidden) {
+      lastTime = now;
+      return;
+    }
+
     const dt = Math.min(0.033, Math.max(0.001, (now - lastTime) * 0.001));
     lastTime = now;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const displayW = Math.max(1, Math.floor(window.innerWidth * dpr));
-    const displayH = Math.max(1, Math.floor(window.innerHeight * dpr));
+    const displayW = Math.max(1, Math.floor(window.innerWidth));
+    const displayH = Math.max(1, Math.floor(window.innerHeight));
     if (canvas.width !== displayW || canvas.height !== displayH) {
       canvas.width = displayW;
       canvas.height = displayH;
     }
 
-        const aspect = displayW / displayH;
+    const aspect = displayW / displayH;
     const orthoHalfW = aspect < 1.0 ? 1.65 : 2.25 * aspect;
     const orthoHalfH = aspect < 1.0 ? (1.65 / aspect) : 2.25;
 
@@ -1154,16 +1126,18 @@ async function main() {
 
       gl.bindVertexArray(moteVAO);
       gl.bindBuffer(gl.ARRAY_BUFFER, moteVBO);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.moteVerts.subarray(0, numMoteVerts * 7));
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, sim.moteVerts, 0, numMoteVerts * 7);
       gl.drawArrays(gl.TRIANGLES, 0, numMoteVerts);
     }
 
     // 2. Instanced 3D Butterflies pass
-    const viewProjMat = computeOrthoViewProj(orthoHalfW, orthoHalfH);
+    computeOrthoViewProj(orthoHalfW, orthoHalfH, viewProjMat);
     gl.useProgram(butterflyProg);
     gl.uniformMatrix4fv(locViewProj, false, viewProjMat);
     gl.uniform1i(locTexArray, 0);
-    gl.uniform3fv(locLightDir, lightDir);
+    gl.uniform3fv(locSurfaceToLight, surfaceToLight);
+    gl.uniform3fv(locHalfVec, halfVec);
+    gl.uniform1f(locSssBase, sssBase);
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
@@ -1180,7 +1154,6 @@ async function main() {
     gl.drawElementsInstanced(gl.TRIANGLES, BUTTERFLY_INDICES.length, gl.UNSIGNED_SHORT, 0, sim.count);
 
     gl.bindVertexArray(null);
-    requestAnimationFrame(frame);
   }
 
   requestAnimationFrame(frame);
